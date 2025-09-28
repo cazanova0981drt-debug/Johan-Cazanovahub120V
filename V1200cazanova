@@ -1,0 +1,193 @@
+-- SERVICIOS Y VARIABLES GLOBALES
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Stats = game:GetService("Stats")
+local VirtualUser = game:GetService("VirtualUser")
+local LocalPlayer = Players.LocalPlayer
+local REP_DELAY = 0.01
+
+local function getPing()
+    local success, ping = pcall(function()
+        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    return success and ping or 999
+end
+
+local function getGoldenRebirthCount()
+    local ultimates = LocalPlayer:FindFirstChild("ultimatesFolder")
+    if ultimates and ultimates:FindFirstChild("Golden Rebirth") then
+        return ultimates["Golden Rebirth"].Value
+    end
+    return 0
+end
+
+local function getStrengthRequiredForRebirth()
+    local rebirths = LocalPlayer.leaderstats.Rebirths.Value
+    local baseStrength = 10000 + (5000 * rebirths)
+    local golden = getGoldenRebirthCount()
+    if golden >= 1 and golden <= 5 then
+        baseStrength = baseStrength * (1 - golden * 0.1)
+    end
+    return math.floor(baseStrength)
+end
+
+local function unequipAllPets()
+    local petsFolder = LocalPlayer:FindFirstChild("petsFolder")
+    if not petsFolder then return end
+    for _, folder in pairs(petsFolder:GetChildren()) do
+        if folder:IsA("Folder") then
+            for _, pet in pairs(folder:GetChildren()) do
+                ReplicatedStorage.rEvents.equipPetEvent:FireServer("unequipPet", pet)
+            end
+        end
+    end
+    task.wait(0.1)
+end
+
+local function equipPetByName(name)
+    local petsFolder = LocalPlayer:FindFirstChild("petsFolder")
+    if not petsFolder then return end
+    for _, folder in pairs(petsFolder:GetChildren()) do
+        if folder:IsA("Folder") then
+            for _, pet in pairs(folder:GetChildren()) do
+                if pet.Name == name then
+                    ReplicatedStorage.rEvents.equipPetEvent:FireServer("equipPet", pet)
+                end
+            end
+        end
+    end
+end
+
+-- =================================================================
+-- FUNCIÓN DE FARME O PRINCIPAL (ACTIVADA POR DEFECTO)
+-- =================================================================
+
+getgenv().AutoRepFarmEnabled = true
+getgenv().AutoFarming = true
+getgenv().AutoSellGems = true
+
+-- Anti-AFK
+Players.LocalPlayer.Idled:Connect(function()
+    VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    task.wait(1)
+    VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+end)
+
+-- Loop de farmeo de repeticiones (el más rápido)
+task.spawn(function()
+    local REPS_PER_CYCLE = 50 
+    while true do
+        if getgenv().AutoRepFarmEnabled and LocalPlayer:FindFirstChild("muscleEvent") then
+            for i = 1, REPS_PER_CYCLE do
+                LocalPlayer.muscleEvent:FireServer("rep")
+            end
+        end
+        task.wait(REP_DELAY)
+    end
+end)
+
+-- Loop de Auto Rebirth
+task.spawn(function()
+    local FarmPet = "Swift Samurai" -- Mascota de farmeo (Strength)
+    local RebirthPet = "Tribal Overlord" -- Mascota de Rebirth (o la que uses)
+
+    while true do
+        if getgenv().AutoFarming then
+            local requiredStrength = getStrengthRequiredForRebirth()
+            
+            unequipAllPets()
+            equipPetByName(FarmPet)
+
+            -- Esperar hasta tener la fuerza requerida
+            while LocalPlayer.leaderstats.Strength.Value < requiredStrength and getgenv().AutoFarming do
+                task.wait(0.1)
+            end
+
+            if not getgenv().AutoFarming then break end
+
+            -- Renacer
+            unequipAllPets()
+            equipPetByName(RebirthPet)
+
+            local oldRebirths = LocalPlayer.leaderstats.Rebirths.Value
+            repeat
+                ReplicatedStorage.rEvents.rebirthRemote:InvokeServer("rebirthRequest")
+                task.wait(0.1)
+            until LocalPlayer.leaderstats.Rebirths.Value > oldRebirths or not getgenv().AutoFarming
+        end
+        task.wait(1)
+    end
+end)
+
+-- Loop de Auto Sell Gems
+task.spawn(function()
+    while true do
+        if getgenv().AutoSellGems then
+            local GemSellPosition = Vector3.new(30, 1.4882, 30) -- Coordenadas de ejemplo
+            local HumanoidRootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if HumanoidRootPart then
+                 HumanoidRootPart.CFrame = CFrame.new(GemSellPosition)
+            end
+
+            local sellEvent = ReplicatedStorage:FindFirstChild("rEvents") and ReplicatedStorage.rEvents:FindFirstChild("sellGemsRemote")
+            if sellEvent then
+                sellEvent:InvokeServer()
+            end
+        end
+        task.wait(15) 
+    end
+end)
+
+
+-- =================================================================
+-- CONTROL POR CHAT
+-- =================================================================
+
+LocalPlayer.Chatted:Connect(function(msg)
+    local loweredMsg = string.lower(msg)
+    if loweredMsg == "!farm on" then
+        getgenv().AutoRepFarmEnabled = true
+        getgenv().AutoFarming = true
+        warn("✅ Farmeo y Auto Rebirth ACTIVADOS.")
+    elseif loweredMsg == "!farm off" then
+        getgenv().AutoRepFarmEnabled = false
+        getgenv().AutoFarming = false
+        warn("🛑 Farmeo y Auto Rebirth DESACTIVADOS.")
+    elseif loweredMsg == "!sell on" then
+        getgenv().AutoSellGems = true
+        warn("✅ Auto Sell Gems ACTIVADO.")
+    elseif loweredMsg == "!sell off" then
+        getgenv().AutoSellGems = false
+        warn("🛑 Auto Sell Gems DESACTIVADO.")
+    elseif loweredMsg == "!kill" then
+        getgenv().KillAuraEnabled = not getgenv().KillAuraEnabled
+        warn("⚔️ Kill Aura: " .. (getgenv().KillAuraEnabled and "ACTIVADO" or "DESACTIVADO"))
+    end
+end)
+
+-- Kill Aura (con control por chat)
+getgenv().KillAuraEnabled = false
+
+task.spawn(function()
+    while true do
+        if getgenv().KillAuraEnabled then
+            local localChar = LocalPlayer.Character
+            if localChar and localChar:FindFirstChild("HumanoidRootPart") then
+                for _, player in pairs(game.Players:GetPlayers()) do
+                    if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+                        local distance = (localChar.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                        if distance < 30 then
+                            player.Character.Humanoid.Health = 0
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+warn("Muscle Legends RAW Script v3.0 cargado. Usa el chat para controlar:")
+warn(" - !farm on / !farm off (Farmeo + Rebirth)")
+warn(" - !sell on / !sell off (Auto Sell Gems)")
+warn(" - !kill (Activa/Desactiva Kill Aura)")
